@@ -126,9 +126,9 @@ override-dependencies = [
     "av; sys_platform == 'never'",                          # CVE: WAN-only codec; excluded from build, installed at test time via scripts/install_diffusion_deps.sh
     "imageio; sys_platform == 'never'",                     # CVE: WAN-only codec; excluded from build, installed at test time via scripts/install_diffusion_deps.sh
     "imageio-ffmpeg; sys_platform == 'never'",              # CVE: WAN-only codec; excluded from build, installed at test time via scripts/install_diffusion_deps.sh
-    "torch; sys_platform == 'never'",
-    "torchvision; sys_platform == 'never'",
-    "triton; sys_platform == 'never'",
+    # "torch; sys_platform == 'never'",
+    # "torchvision; sys_platform == 'never'",
+    # "triton; sys_platform == 'never'",
     "transformer-engine @ git+https://github.com/NVIDIA/TransformerEngine.git@f8a01cd5ac55a6b669bacc4b222242bfff2c822a",
     "mlflow>=3.9.0",                                        # To address CVE-2025-15031
     "cachetools>=5.0.0",
@@ -149,6 +149,12 @@ url = "https://pypi.nvidia.com"
 [tool.uv.sources]
 megatron-core = { path = "3rdparty/Megatron-LM/", editable = true }
 nvidia-modelopt = { index = "nvidia" }
+
+[tool.uv.extra-build-variables.transformer-engine]
+NVTE_FRAMEWORK = "pytorch"
+MAX_JOBS = "16"
+NVTE_BUILD_THREADS_PER_JOB = "1"
+NVTE_CUDA_ARCHS = "90"
 
 [project.optional-dependencies]
 recipes = [
