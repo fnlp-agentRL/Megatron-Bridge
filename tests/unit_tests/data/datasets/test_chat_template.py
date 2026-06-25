@@ -188,6 +188,27 @@ class TestChatPreprocess:
         call_kwargs = mock_hf_tokenizer.apply_chat_template.call_args[1]
         assert call_kwargs["tools"] == tool_schemas
 
+    def test_chat_preprocess_forwards_max_length(self):
+        """Test chat preprocessing forwards max_length to the HF tokenizer."""
+        mock_tokenizer = MagicMock()
+        mock_hf_tokenizer = MagicMock()
+        mock_tokenizer = mock_hf_tokenizer
+        mock_tokenizer.eos_id = 2
+        mock_tokenizer.legacy = False
+
+        mock_hf_tokenizer.chat_template = "{% generation %}{{ messages }}{% endgeneration %}"
+        mock_hf_tokenizer.apply_chat_template.return_value = {
+            "input_ids": [1, 10, 20, 2],
+            "assistant_masks": [0, 0, 1, 1],
+        }
+
+        source = {"conversations": [{"from": "User", "value": "Test"}]}
+
+        _chat_preprocess(source, mock_tokenizer, max_length=512)
+
+        call_kwargs = mock_hf_tokenizer.apply_chat_template.call_args[1]
+        assert call_kwargs["max_length"] == 512
+
     def test_chat_preprocess_normalizes_string_tool_call_arguments(self):
         """Test that string tool call arguments are decoded before applying chat template."""
         mock_tokenizer = MagicMock()
@@ -415,6 +436,9 @@ class TestGPTSFTChatDataset:
         assert result["metadata"]["metadata_key"] == "test_value"
         # Verify conversations not in metadata by default
         assert "conversations" not in result["metadata"]
+
+        call_kwargs = mock_hf_tokenizer.apply_chat_template.call_args[1]
+        assert call_kwargs["max_length"] == 512
 
     @patch("megatron.bridge.data.datasets.sft._JSONLMemMapDataset")
     def test_collate_fn_handles_loss_mask(self, mock_dataset_class):

@@ -909,7 +909,12 @@ def _normalize_chat_tool_call_arguments(chat: list[dict]) -> list[dict]:
     return normalized_chat
 
 
-def _chat_preprocess(source: dict, tokenizer: MegatronTokenizer, tool_schemas: Optional[list[Any]] = None) -> dict:
+def _chat_preprocess(
+    source: dict,
+    tokenizer: MegatronTokenizer,
+    tool_schemas: Optional[list[Any]] = None,
+    max_length: int | None = None,
+) -> dict:
     """
     Preprocess messages to apply chat template and tokenize. Returns a dictionary of tokens.
 
@@ -929,6 +934,7 @@ def _chat_preprocess(source: dict, tokenizer: MegatronTokenizer, tool_schemas: O
         tokenizer - tokenizer to apply chat templates to
         tool_schemas - Optional tool_schemas to supply to apply_chat_template, these will be superseded
            by tools supplied with the message
+        max_length - Optional maximum token length forwarded to apply_chat_template.
 
     Output:
         {
@@ -982,6 +988,7 @@ def _chat_preprocess(source: dict, tokenizer: MegatronTokenizer, tool_schemas: O
         tokenize=True,
         return_dict=True,
         return_assistant_tokens_mask=True,
+        max_length=max_length,
     )
 
     # Choose the last conversation as answer other history are context by finding the last masked token

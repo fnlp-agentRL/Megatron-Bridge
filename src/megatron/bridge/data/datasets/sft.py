@@ -1198,7 +1198,7 @@ class GPTSFTChatDataset(GPTSFTDataset):
             )
         else:
             # Use HuggingFace chat template preprocessing
-            result = _chat_preprocess(example, self.tokenizer, self.tool_schemas)
+            result = _chat_preprocess(example, self.tokenizer, self.tool_schemas, max_length=self.max_seq_length)
 
         # store metadata in dataset, in case user may have keys required in the prediction json files
         metadata = {k: v for k, v in example.items() if k not in ["conversations", "messages"]}
