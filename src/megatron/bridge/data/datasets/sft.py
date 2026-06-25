@@ -843,12 +843,27 @@ class GPTSFTPackedDataset(GPTSFTDataset):
             # assert idx < len(self.samples_mapping)
             idx = self.samples_mapping[idx]
 
-        input_ids = self.indexed_dataset[idx]["input_ids"]
-        seq_boundaries = self.indexed_dataset[idx]["seq_start_id"] + [len(input_ids)]
-        loss_mask = self.indexed_dataset[idx]["loss_mask"]
-        if idx < 0:
+        is_padding_sample = idx < 0
+        item = self.indexed_dataset[idx]
+        input_ids = item["input_ids"]
+        seq_start_id = item["seq_start_id"]
+        seq_start_id = seq_start_id.tolist() if hasattr(seq_start_id, "tolist") else list(seq_start_id)
+        seq_boundaries = seq_start_id + [len(input_ids)]
+        loss_mask = item["loss_mask"]
+        has_padding_mask = "padding_mask" in item
+        padding_mask = item["padding_mask"] if has_padding_mask else None
+        if is_padding_sample:
             loss_mask = [0] * len(loss_mask)
-        return {"input_ids": input_ids, "seq_boundaries": seq_boundaries, "loss_mask": loss_mask}
+            if has_padding_mask:
+                padding_mask = [1] * len(padding_mask)
+        sample = {
+            "input_ids": input_ids,
+            "seq_boundaries": seq_boundaries,
+            "loss_mask": loss_mask,
+        }
+        if has_padding_mask:
+            sample["padding_mask"] = padding_mask
+        return sample
 
     def _load_dataset(self):
         try:
@@ -892,6 +907,15 @@ class GPTSFTPackedDataset(GPTSFTDataset):
             ]
         )
 
+    def _build_padding_mask(self, processed_example):
+        seq_boundaries = processed_example["seq_boundaries"]
+        padding_mask = processed_example.get("padding_mask")
+        if padding_mask is None:
+            padding_mask = [0] * len(processed_example["input_ids"])
+        return np.concatenate(
+            [padding_mask[seq_boundaries[i] : seq_boundaries[i + 1] - 1] for i in range(len(seq_boundaries) - 1)]
+        )
+
     def _maybe_cast_to_list(self, x):
         return [item.tolist() if isinstance(item, np.ndarray) else item for item in x]
 
@@ -932,6 +956,9 @@ class GPTSFTPackedDataset(GPTSFTDataset):
         ]
 
         loss_mask = [self._build_loss_mask(item) for item in batch]
+        has_padding_mask = any("padding_mask" in item for item in batch)
+        if has_padding_mask:
+            padding_mask = [self._build_padding_mask(item) for item in batch]
 
         token_count = [item.shape[0] for item in input_ids]
 
@@ -997,6 +1024,8 @@ class GPTSFTPackedDataset(GPTSFTDataset):
         input_ids = self._collate_item(input_ids, max_length=max_length, pad_id=self.tokenizer.eos_id)
         labels = self._collate_item(labels, max_length=max_length, pad_id=self.tokenizer.eos_id)
         loss_mask = self._collate_item(loss_mask, max_length=max_length, pad_id=0)
+        if has_padding_mask:
+            padding_mask = self._collate_item(padding_mask, max_length=max_length, pad_id=1)
         position_ids = self._collate_item(position_ids, max_length=max_length, pad_id=0)
 
         tokens = torch.LongTensor(input_ids)
@@ -1011,6 +1040,8 @@ class GPTSFTPackedDataset(GPTSFTDataset):
             "position_ids": torch.LongTensor(position_ids),
             "token_count": token_count,
         }
+        if has_padding_mask:
+            processed_batch["padding_mask"] = torch.LongTensor(padding_mask)
 
         if self.return_cu_seqlen:
             cu_seqlens = self._collate_item(
@@ -1221,6 +1252,16 @@ class GPTSFTChatDataset(GPTSFTDataset):
         # prevents the model from incurring loss on tokens that were never meant to
         # be predicted, such as user-provided context or padding.
         loss_mask = [item["loss_mask"][1:].tolist() for item in batch]
+        padding_mask = []
+        for item in batch:
+            item_padding_mask = item.get("padding_mask")
+            if item_padding_mask is None:
+                padding_mask.append([0] * (len(item["input_ids"]) - 1))
+                continue
+            item_padding_mask = item_padding_mask[:-1]
+            padding_mask.append(
+                item_padding_mask.tolist() if hasattr(item_padding_mask, "tolist") else list(item_padding_mask)
+            )
         # Metadata remains unchanged, carrying any additional non-token-related
         # information that might be useful for evaluation, debugging, or tracking
         # purposes.
@@ -1232,6 +1273,7 @@ class GPTSFTChatDataset(GPTSFTDataset):
             input_ids = [x[: self.max_seq_length] for x in input_ids]
             labels = [x[: self.max_seq_length] for x in labels]
             loss_mask = [x[: self.max_seq_length] for x in loss_mask]
+            padding_mask = [x[: self.max_seq_length] for x in padding_mask]
 
             # Safety check: warn if truncation removed all trainable tokens
             for i, x in enumerate(loss_mask):
@@ -1263,6 +1305,7 @@ class GPTSFTChatDataset(GPTSFTDataset):
         )
         labels = torch.LongTensor(self._collate_item(labels, max_length=max_length, pad_id=self.tokenizer.eos_id))
         loss_mask = torch.LongTensor(self._collate_item(loss_mask, max_length=max_length, pad_id=0))
+        padding_mask = torch.LongTensor(self._collate_item(padding_mask, max_length=max_length, pad_id=1))
         context_lengths = torch.LongTensor([len(x) for x in contexts])
         contexts = torch.LongTensor(self._collate_item(contexts, max_length=max_length, pad_id=self.tokenizer.eos_id))
         answers = torch.LongTensor(self._collate_item(answers, max_length=max_length, pad_id=self.tokenizer.eos_id))
@@ -1271,6 +1314,7 @@ class GPTSFTChatDataset(GPTSFTDataset):
             "tokens": input_ids,
             "labels": labels,
             "loss_mask": loss_mask,
+            "padding_mask": padding_mask,
             "position_ids": position_ids,
             "contexts": contexts,
             "context_lengths": context_lengths,

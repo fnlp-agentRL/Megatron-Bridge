@@ -47,7 +47,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Required columns in packed Parquet schema
+# Required columns in packed Parquet schema. ``padding_mask`` is optional for backward compatibility
+# with packed files produced before that field existed.
 REQUIRED_COLUMNS = {"input_ids", "seq_start_id", "loss_mask"}
 
 
@@ -266,7 +267,8 @@ def write_packed_parquet(
     """Write packed sequence data to a Parquet file.
 
     Args:
-        rows: List of dicts with keys 'input_ids', 'loss_mask', 'seq_start_id'.
+        rows: List of dicts with keys 'input_ids', 'loss_mask', 'seq_start_id', and optionally
+              'padding_mask'.
               This is the output format of fill_packing_strategy().
         output_path: Path to write the Parquet file.
         row_group_size: Number of rows per row group (default 500).
@@ -277,6 +279,7 @@ def write_packed_parquet(
         {
             "input_ids": [row["input_ids"] for row in rows],
             "loss_mask": [row["loss_mask"] for row in rows],
+            "padding_mask": [row.get("padding_mask", [0] * len(row["input_ids"])) for row in rows],
             "seq_start_id": [row["seq_start_id"] for row in rows],
         }
     )
@@ -307,6 +310,8 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
         - input_ids: list<int32> - Token IDs for the packed sequence
         - seq_start_id: list<int32> - Start offsets for each sub-sequence within the pack
         - loss_mask: list<int8> - Per-token loss mask (0 or 1), same length as input_ids
+        - padding_mask: optional list<int8> - Artificial pad-token mask (1 for padding, 0 otherwise),
+          same length as input_ids. Missing columns are omitted from returned samples for backward compatibility.
 
     Example:
         >>> # Single file
@@ -350,6 +355,7 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
         self._num_rows: int = 0  # Total rows across all files
         self._file_offsets: list[int] = []  # Cumulative row counts: [0, rows_file0, rows_file0+rows_file1, ...]
         self._file_row_group_offsets: list[list[int]] = []  # Row group offsets per file
+        self._has_padding_mask_by_file: list[bool] = []  # Whether each file has the optional padding_mask column
 
         # Lazy reader state (opened in worker processes after fork)
         # Maps file_idx -> (ParquetFile, handle)
@@ -415,6 +421,7 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
 
             # Validate schema on every file to catch malformed shards early
             schema_columns = set(schema.names)
+            self._has_padding_mask_by_file.append("padding_mask" in schema_columns)
             missing_columns = REQUIRED_COLUMNS - schema_columns
             if missing_columns:
                 raise ValueError(
@@ -448,7 +455,13 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
         )
 
     @staticmethod
-    def validate_row(idx: int, input_ids: list, loss_mask: list, seq_start_id: list) -> None:
+    def validate_row(
+        idx: int,
+        input_ids: list,
+        loss_mask: list,
+        seq_start_id: list,
+        padding_mask: list | None = None,
+    ) -> None:
         """Validate packed row invariants.
 
         This is NOT called in the training hot path for performance reasons.
@@ -459,12 +472,18 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
             input_ids: Token IDs for the packed sequence.
             loss_mask: Per-token loss mask.
             seq_start_id: Start offsets for each sub-sequence.
+            padding_mask: Optional per-token padding mask.
 
         Raises:
             ValueError: If any invariant is violated.
         """
         if len(loss_mask) != len(input_ids):
             raise ValueError(f"Row {idx}: loss_mask length ({len(loss_mask)}) != input_ids length ({len(input_ids)})")
+
+        if padding_mask is not None and len(padding_mask) != len(input_ids):
+            raise ValueError(
+                f"Row {idx}: padding_mask length ({len(padding_mask)}) != input_ids length ({len(input_ids)})"
+            )
 
         if not seq_start_id or seq_start_id[0] != 0:
             raise ValueError(
@@ -602,6 +621,7 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
                 - input_ids: list[int] - Token IDs
                 - seq_boundaries: list[int] - Sequence boundaries (derived from seq_start_id)
                 - loss_mask: list[int] - Per-token loss mask
+                - padding_mask: list[int] - Per-token padding mask, only if the Parquet file has the column
         """
         # Apply sample mapping if exists
         if self.samples_mapping is not None:
@@ -622,9 +642,10 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
         # Read row group with caching
         cache_key = (file_idx, row_group_id)
         if (self._cached_file_idx, self._cached_row_group_id) != cache_key:
-            self._cached_row_group_table = pf.read_row_group(
-                row_group_id, columns=["input_ids", "seq_start_id", "loss_mask"]
-            )
+            columns = ["input_ids", "seq_start_id", "loss_mask"]
+            if self._has_padding_mask_by_file[file_idx]:
+                columns.append("padding_mask")
+            self._cached_row_group_table = pf.read_row_group(row_group_id, columns=columns)
             self._cached_file_idx = file_idx
             self._cached_row_group_id = row_group_id
 
@@ -633,16 +654,25 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
         input_ids = table.column("input_ids")[row_in_group].as_py()
         seq_start_id = table.column("seq_start_id")[row_in_group].as_py()
         loss_mask = table.column("loss_mask")[row_in_group].as_py()
+        has_padding_mask = self._has_padding_mask_by_file[file_idx]
+        padding_mask = None
+        if has_padding_mask:
+            padding_mask = table.column("padding_mask")[row_in_group].as_py()
 
         # Compute derived field
         seq_boundaries = seq_start_id + [len(input_ids)]
 
-        # For padding samples, zero out the loss mask
+        # For padding samples, zero out the loss mask and exclude all dummy tokens from padding-aware routing.
         if is_padding_sample:
             loss_mask = [0] * len(loss_mask)
+            if has_padding_mask:
+                padding_mask = [1] * len(padding_mask)
 
-        return {
+        sample = {
             "input_ids": input_ids,
             "seq_boundaries": seq_boundaries,
             "loss_mask": loss_mask,
         }
+        if has_padding_mask:
+            sample["padding_mask"] = padding_mask
+        return sample

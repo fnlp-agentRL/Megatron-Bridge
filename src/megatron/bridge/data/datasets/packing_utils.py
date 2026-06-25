@@ -281,27 +281,47 @@ def fill_packing_strategy(
                     err_msg += f"{err} {per_seq_data[0]}"
                     logging.error(err_msg)
                     raise ValueError(err_msg)
-            ifile_handles[seq_len] = (input_ids, loss_mask)
-    input_ids, loss_mask, seq_start_id = {}, {}, {}
+            padding_mask = []
+            for item in per_seq_data:
+                item_padding_mask = item.get("padding_mask")
+                if item_padding_mask is None:
+                    item_padding_mask = [0] * len(item["input_ids"])
+                if len(item_padding_mask) != len(item["input_ids"]):
+                    err_msg = "padding_mask length must match input_ids length in example - "
+                    err_msg += f"{len(item_padding_mask)=} {len(item['input_ids'])=} {item}"
+                    logging.error(err_msg)
+                    raise ValueError(err_msg)
+                if hasattr(item_padding_mask, "tolist"):
+                    item_padding_mask = item_padding_mask.tolist()
+                else:
+                    item_padding_mask = list(item_padding_mask)
+                padding_mask.append(item_padding_mask)
+            padding_mask = np.array(padding_mask)[perm].tolist()
+            ifile_handles[seq_len] = (input_ids, loss_mask, padding_mask)
+    input_ids, loss_mask, padding_mask, seq_start_id = {}, {}, {}, {}
     for oindex, assignment in tqdm(enumerate(assignments), total=len(assignments)):
-        _input_ids, _loss_mask, _seq_start_id = [], [], [0]
+        _input_ids, _loss_mask, _padding_mask, _seq_start_id = [], [], [], [0]
         for seq_length in assignment:
             _input_ids.extend(ifile_handles[seq_length][0].pop())
             _loss_mask.extend(ifile_handles[seq_length][1].pop())
+            _padding_mask.extend(ifile_handles[seq_length][2].pop())
             _seq_start_id.append(len(_input_ids))
         input_ids[oindex] = _input_ids
         loss_mask[oindex] = _loss_mask
+        padding_mask[oindex] = _padding_mask
         seq_start_id[oindex] = _seq_start_id[:-1]
     output_data = []
     for i in range(len(input_ids)):
         item_dict = {
             "input_ids": input_ids[i],
             "loss_mask": loss_mask[i],
+            "padding_mask": padding_mask[i],
             "seq_start_id": seq_start_id[i],
         }
         output_data.append(item_dict)
     assert all(not seq[0] for seq in ifile_handles.values()), "Error: There are items left over from the assignment"
     assert all(not seq[1] for seq in ifile_handles.values()), "Error: There are items left over from the assignment"
+    assert all(not seq[2] for seq in ifile_handles.values()), "Error: There are items left over from the assignment"
     return output_data
 
 

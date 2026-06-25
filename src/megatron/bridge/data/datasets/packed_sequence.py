@@ -57,11 +57,12 @@ def _retrieve_tokenized(dataset, num_workers):
 def _pre_pad_data_point(data: dict, max_seq_length: int, max_length_to_pad: int, pad_id: int) -> None:
     """Pad a single data point in place so its sequences are divisible by the requested multiple.
 
-    Pads ``input_ids``/``context_ids`` with ``pad_id`` and ``loss_mask`` with ``0`` (no loss on
-    pad positions). The chat preprocessing path (``_chat_preprocess``) returns ``torch`` tensors
-    rather than plain lists, so values are normalized to lists before concatenating; this avoids a
-    ``TypeError`` from ``tensor + list`` and keeps ``loss_mask`` the same length as ``input_ids`` so
-    that grouped samples do not produce a ragged array in ``fill_packing_strategy``.
+    Pads ``input_ids``/``context_ids`` with ``pad_id``, ``loss_mask`` with ``0`` (no loss on pad
+    positions), and ``padding_mask`` with ``1`` (artificial pad positions). The chat preprocessing
+    path (``_chat_preprocess``) returns ``torch`` tensors rather than plain lists, so values are
+    normalized to lists before concatenating; this avoids a ``TypeError`` from ``tensor + list`` and
+    keeps mask fields the same length as ``input_ids`` so that grouped samples do not produce a
+    ragged array in ``fill_packing_strategy``.
 
     Args:
         data: A single tokenized example. Mutated in place.
@@ -70,9 +71,14 @@ def _pre_pad_data_point(data: dict, max_seq_length: int, max_length_to_pad: int,
         pad_id: Token id used to pad ``input_ids``/``context_ids``.
     """
     assert max_seq_length >= max_length_to_pad
-    # loss_mask must be padded too (with 0), otherwise samples that round to the same padded
-    # input_ids length but had different original lengths keep mismatched loss_mask lengths.
-    pad_values = {"input_ids": pad_id, "context_ids": pad_id, "loss_mask": 0}
+    if "input_ids" in data and "padding_mask" not in data:
+        input_ids = data["input_ids"]
+        input_ids = input_ids.tolist() if hasattr(input_ids, "tolist") else list(input_ids)
+        data["padding_mask"] = [0] * len(input_ids)
+
+    # Mask fields must be padded too, otherwise samples that round to the same padded input_ids
+    # length but had different original lengths keep mismatched mask lengths.
+    pad_values = {"input_ids": pad_id, "context_ids": pad_id, "loss_mask": 0, "padding_mask": 1}
     for key, pad_value in pad_values.items():
         if key not in data:
             continue

@@ -906,6 +906,7 @@ def _chat_preprocess(source: dict, tokenizer: MegatronTokenizer, tool_schemas: O
             "loss_mask": torch.BoolTensor(),
             "context_ids": torch.LongTensor(),
             "answer_ids": torch.LongTensor(),
+            "padding_mask": torch.BoolTensor(),
         }
 
     * input_ids contain tokenized messages with chat template applied
@@ -967,11 +968,14 @@ def _chat_preprocess(source: dict, tokenizer: MegatronTokenizer, tool_schemas: O
     context_ids = input_ids[:context_end_idx]
     answer_ids = input_ids[context_end_idx:]
 
+    padding_mask = [0] * len(input_ids)
+
     return dict(
         input_ids=torch.LongTensor(input_ids),
         loss_mask=torch.BoolTensor(mask),
         context_ids=torch.LongTensor(context_ids),
         answer_ids=torch.LongTensor(answer_ids),
+        padding_mask=torch.BoolTensor(padding_mask),
     )
 
 

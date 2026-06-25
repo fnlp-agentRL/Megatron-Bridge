@@ -63,6 +63,7 @@ def _make_packed_row(n_tokens: int = 64, n_seqs: int = 2):
     return {
         "input_ids": list(range(1, n_tokens + 1)),
         "loss_mask": [1] * n_tokens,
+        "padding_mask": [0] * n_tokens,
         "seq_start_id": seq_start_id,
     }
 
@@ -73,6 +74,7 @@ def _write_parquet(path: str | Path, rows: list[dict], row_group_size: int = 500
         {
             "input_ids": [row["input_ids"] for row in rows],
             "loss_mask": [row["loss_mask"] for row in rows],
+            "padding_mask": [row.get("padding_mask", [0] * len(row["input_ids"])) for row in rows],
             "seq_start_id": [row["seq_start_id"] for row in rows],
         }
     )
@@ -180,6 +182,7 @@ class TestPackedParquetDatasetSingleFile:
         sample = ds[0]
         assert "input_ids" in sample
         assert "loss_mask" in sample
+        assert "padding_mask" in sample
         assert "seq_boundaries" in sample
 
     def test_getitem_seq_boundaries(self, parquet_file):
@@ -194,11 +197,28 @@ class TestPackedParquetDatasetSingleFile:
             sample = ds[i]
             assert len(sample["input_ids"]) == 64
             assert len(sample["loss_mask"]) == 64
+            assert len(sample["padding_mask"]) == 64
 
     def test_negative_index_zeroes_loss_mask(self, parquet_file):
         ds = _make_dataset(parquet_file)
         sample = ds[-1]
         assert all(m == 0 for m in sample["loss_mask"])
+        assert all(m == 1 for m in sample["padding_mask"])
+
+    def test_missing_padding_mask_column_omits_field(self, tmp_path):
+        table = pa.table(
+            {
+                "input_ids": [[1, 2, 3]],
+                "loss_mask": [[1, 1, 1]],
+                "seq_start_id": [[0]],
+            }
+        )
+        path = tmp_path / "legacy.idx.parquet"
+        pq.write_table(table, str(path))
+
+        ds = _make_dataset(path)
+        assert "padding_mask" not in ds[0]
+        assert "padding_mask" not in ds.collate_fn([ds[0]])
 
     def test_max_num_samples(self, parquet_file):
         ds = _make_dataset(parquet_file, max_num_samples=5)
@@ -312,6 +332,7 @@ class TestValidateRow:
             idx=0,
             input_ids=[1, 2, 3, 4],
             loss_mask=[1, 1, 0, 1],
+            padding_mask=[0, 0, 1, 1],
             seq_start_id=[0, 2],
         )
 
@@ -321,6 +342,16 @@ class TestValidateRow:
                 idx=0,
                 input_ids=[1, 2, 3],
                 loss_mask=[1, 1],
+                seq_start_id=[0],
+            )
+
+    def test_padding_mask_length_mismatch(self):
+        with pytest.raises(ValueError, match="padding_mask length"):
+            GPTSFTPackedParquetDataset.validate_row(
+                idx=0,
+                input_ids=[1, 2, 3],
+                loss_mask=[1, 1, 1],
+                padding_mask=[0, 1],
                 seq_start_id=[0],
             )
 

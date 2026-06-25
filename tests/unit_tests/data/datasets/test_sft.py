@@ -20,7 +20,12 @@ import numpy as np
 import pytest
 
 from megatron.bridge.data.datasets import sft as sft_module
-from megatron.bridge.data.datasets.sft import GPTSFTChatDataset, GPTSFTDataset, GPTSFTPackedDataset, get_dataset_root
+from megatron.bridge.data.datasets.sft import (
+    GPTSFTChatDataset,
+    GPTSFTDataset,
+    GPTSFTPackedDataset,
+    get_dataset_root,
+)
 
 
 def create_mock_tokenizer():
@@ -74,6 +79,7 @@ def get_gpt_sft(tmp_path, dataset_type="sft"):
                     "input_ids": np.array([1, 2, 3, 4, 5], dtype=np.int64),
                     "seq_start_id": np.array([0], dtype=np.int64),
                     "loss_mask": np.array([0, 0, 1, 1, 1], dtype=np.int64),
+                    "padding_mask": np.array([0, 0, 0, 1, 1], dtype=np.int64),
                 }
                 for _ in range(num_samples)
             ],
@@ -199,6 +205,12 @@ class TestDataGPTSFTPackedDataset:
         dataset, dataset_length = get_gpt_sft(tmp_path, dataset_type="packed")
 
         assert len(dataset) == dataset_length
+        sample = dataset[0]
+        assert sample["seq_boundaries"] == [0, 5]
+        padding_mask = (
+            sample["padding_mask"].tolist() if hasattr(sample["padding_mask"], "tolist") else sample["padding_mask"]
+        )
+        assert padding_mask == [0, 0, 0, 1, 1]
 
     def test_collate_fn(self, tmp_path):
         dataset, _ = get_gpt_sft(tmp_path, dataset_type="packed")
@@ -211,8 +223,9 @@ class TestDataGPTSFTPackedDataset:
                 "context_length": 2,
                 "answer_ids": [104, 105],
                 "metadata": {"id": "ex1"},
-                "seq_boundaries": (0, 3),
+                "seq_boundaries": [0, 5],
                 "loss_mask": [0, 0, 0, 1, 1],
+                "padding_mask": [0, 0, 1, 1, 1],
                 "token_count": 5,
             },
             {
@@ -222,12 +235,19 @@ class TestDataGPTSFTPackedDataset:
                 "context_length": 1,
                 "answer_ids": [203, 204],
                 "metadata": {"id": "ex2"},
-                "seq_boundaries": (0, 2),
+                "seq_boundaries": [0, 4],
                 "loss_mask": [0, 0, 1, 1],
+                "padding_mask": [0, 0, 0, 0],
                 "token_count": 4,
             },
         ]
-        dataset.collate_fn(batch)
+        result = dataset.collate_fn(batch)
+
+        assert result["padding_mask"].shape == result["loss_mask"].shape
+        assert result["padding_mask"][0, :4].tolist() == [0, 0, 1, 1]
+        assert result["padding_mask"][0, 4:].tolist() == [1] * (result["padding_mask"].shape[1] - 4)
+        assert result["padding_mask"][1, :3].tolist() == [0, 0, 0]
+        assert result["padding_mask"][1, 3:].tolist() == [1] * (result["padding_mask"].shape[1] - 3)
 
     def test_utils_func_packed(self, tmp_path):
         dataset, _ = get_gpt_sft(tmp_path, dataset_type="packed")

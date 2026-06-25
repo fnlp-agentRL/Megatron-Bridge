@@ -15,6 +15,7 @@
 import torch
 
 from megatron.bridge.data.datasets.packed_sequence import _pre_pad_data_point
+from megatron.bridge.data.datasets.packing_utils import fill_packing_strategy
 
 
 PAD_ID = 0
@@ -26,17 +27,20 @@ def test_pre_pad_data_point_chat_tensors_do_not_raise():
         "input_ids": torch.LongTensor([5, 6, 7]),
         "loss_mask": torch.BoolTensor([False, True, True]),
         "context_ids": torch.LongTensor([5, 6]),
+        "padding_mask": torch.BoolTensor([False, False, False]),
     }
     # max_length_to_pad=8 -> input_ids padded to 8 - 3 + 1 = 6 extra -> length 9
     _pre_pad_data_point(data, max_seq_length=16, max_length_to_pad=8, pad_id=PAD_ID)
 
     assert isinstance(data["input_ids"], list)
     assert isinstance(data["loss_mask"], list)
+    assert isinstance(data["padding_mask"], list)
     # loss_mask must end up the same length as input_ids, otherwise fill_packing_strategy's
     # np.array([...loss_mask...]) raises an inhomogeneous-shape error when samples are grouped.
     assert len(data["loss_mask"]) == len(data["input_ids"])
     # padded loss_mask positions carry 0 (no loss on pad tokens)
     assert data["loss_mask"][3:] == [0] * (len(data["loss_mask"]) - 3)
+    assert data["padding_mask"][3:] == [1] * (len(data["padding_mask"]) - 3)
     assert data["input_ids"][3:] == [PAD_ID] * (len(data["input_ids"]) - 3)
 
 
@@ -56,12 +60,13 @@ def test_pre_pad_data_point_equalizes_loss_mask_lengths():
 
 
 def test_pre_pad_data_point_non_chat_lists_still_work():
-    """Non-chat (GPTSFTDataset) path returns plain lists without loss_mask; must be unaffected."""
+    """Non-chat (GPTSFTDataset) path returns plain lists without loss_mask; must still get padding_mask."""
     data = {"input_ids": [9, 9, 9], "context_ids": [9, 9]}
     _pre_pad_data_point(data, max_seq_length=16, max_length_to_pad=8, pad_id=PAD_ID)
 
     assert data["input_ids"] == [9, 9, 9] + [PAD_ID] * 6
     assert "loss_mask" not in data
+    assert data["padding_mask"] == [0, 0, 0] + [1] * 6
 
 
 def test_pre_pad_data_point_truncates_overlong():
@@ -71,3 +76,35 @@ def test_pre_pad_data_point_truncates_overlong():
 
     assert len(data["input_ids"]) == 16
     assert len(data["loss_mask"]) == 16
+    assert len(data["padding_mask"]) == 16
+
+
+def test_fill_packing_strategy_preserves_padding_mask():
+    sequences = {idx: [] for idx in range(5)}
+    sequences[4] = [
+        {
+            "input_ids": [10, 11, PAD_ID, PAD_ID, PAD_ID],
+            "loss_mask": [False, True, False, False, False],
+            "padding_mask": [0, 0, 1, 1, 1],
+        }
+    ]
+
+    output_data = fill_packing_strategy([[4]], sequences, pack_size=4, pad_id=PAD_ID)
+
+    assert output_data == [
+        {
+            "input_ids": [10, 11, PAD_ID, PAD_ID, PAD_ID],
+            "loss_mask": [True, False, False, False, False],
+            "padding_mask": [0, 0, 1, 1, 1],
+            "seq_start_id": [0],
+        }
+    ]
+
+
+def test_fill_packing_strategy_defaults_missing_padding_mask_to_zeros():
+    sequences = {idx: [] for idx in range(3)}
+    sequences[2] = [{"input_ids": [10, 11, 12], "loss_mask": [False, True, True]}]
+
+    output_data = fill_packing_strategy([[2]], sequences, pack_size=2, pad_id=PAD_ID)
+
+    assert output_data[0]["padding_mask"] == [0, 0, 0]

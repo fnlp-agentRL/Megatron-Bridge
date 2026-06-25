@@ -374,6 +374,7 @@ class TestGPTSFTChatDataset:
             {
                 "input_ids": torch.tensor([1, 10, 20, 30, 2]),
                 "loss_mask": torch.tensor([0, 0, 1, 1, 1]),
+                "padding_mask": torch.tensor([0, 0, 0, 1, 1]),
                 "context_ids": torch.tensor([1, 10]),
                 "answer_ids": torch.tensor([20, 30, 2]),
                 "metadata": {"id": 1},
@@ -381,6 +382,7 @@ class TestGPTSFTChatDataset:
             {
                 "input_ids": torch.tensor([1, 11, 21, 2]),
                 "loss_mask": torch.tensor([0, 0, 1, 1]),
+                "padding_mask": torch.tensor([0, 0, 0, 0]),
                 "context_ids": torch.tensor([1, 11]),
                 "answer_ids": torch.tensor([21, 2]),
                 "metadata": {"id": 2},
@@ -393,6 +395,7 @@ class TestGPTSFTChatDataset:
         assert "tokens" in result
         assert "labels" in result
         assert "loss_mask" in result
+        assert "padding_mask" in result
         assert "position_ids" in result
         assert "contexts" in result
         assert "answers" in result
@@ -401,6 +404,11 @@ class TestGPTSFTChatDataset:
         # Verify batch size
         assert result["tokens"].shape[0] == 2
         assert result["labels"].shape[0] == 2
+        assert result["padding_mask"].shape == result["loss_mask"].shape
+        assert result["padding_mask"][0, :4].tolist() == [0, 0, 0, 1]
+        assert result["padding_mask"][0, 4:].tolist() == [1] * (result["padding_mask"].shape[1] - 4)
+        assert result["padding_mask"][1, :3].tolist() == [0, 0, 0]
+        assert result["padding_mask"][1, 3:].tolist() == [1] * (result["padding_mask"].shape[1] - 3)
 
 
 class TestCreateSFTDataset:
@@ -1044,6 +1052,8 @@ class TestPackedChatDatasetIntegration:
 
         # Should have loss_mask, not mask
         assert "loss_mask" in result
+        assert "padding_mask" in result
+        assert result["padding_mask"].tolist() == [False, False, False, False]
         assert "mask" not in result
 
     def test_legacy_chat_dataset_backward_compatibility(self):
