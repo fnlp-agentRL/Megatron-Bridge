@@ -879,6 +879,36 @@ def _convert_to_openai_messages(source: dict) -> list[dict]:
     return chat
 
 
+def _normalize_chat_tool_call_arguments(chat: list[dict]) -> list[dict]:
+    """Normalize OpenAI-style string function arguments for HF chat templates."""
+    normalized_chat = copy.deepcopy(chat)
+    for message in normalized_chat:
+        if not isinstance(message, dict):
+            continue
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+
+            function = tool_call.get("function")
+            tool_call_args = function if isinstance(function, dict) else tool_call
+            arguments = tool_call_args.get("arguments")
+            if not isinstance(arguments, str):
+                continue
+
+            try:
+                parsed_arguments = json.loads(arguments, strict=False)
+            except json.JSONDecodeError as e:
+                raise ValueError("tool_call function.arguments must be a JSON object string.") from e
+            if not isinstance(parsed_arguments, dict):
+                raise ValueError("tool_call function.arguments must decode to a JSON object.")
+            tool_call_args["arguments"] = parsed_arguments
+
+    return normalized_chat
+
+
 def _chat_preprocess(source: dict, tokenizer: MegatronTokenizer, tool_schemas: Optional[list[Any]] = None) -> dict:
     """
     Preprocess messages to apply chat template and tokenize. Returns a dictionary of tokens.
@@ -922,7 +952,7 @@ def _chat_preprocess(source: dict, tokenizer: MegatronTokenizer, tool_schemas: O
             "The tokenizer must have a '_tokenizer' attribute with an 'apply_chat_template' method."
         )
 
-    chat = _convert_to_openai_messages(source)
+    chat = _normalize_chat_tool_call_arguments(_convert_to_openai_messages(source))
     tools = None
     if isinstance(source, dict):
         tools = source.get("tools") or tool_schemas

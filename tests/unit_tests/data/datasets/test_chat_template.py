@@ -188,6 +188,75 @@ class TestChatPreprocess:
         call_kwargs = mock_hf_tokenizer.apply_chat_template.call_args[1]
         assert call_kwargs["tools"] == tool_schemas
 
+    def test_chat_preprocess_normalizes_string_tool_call_arguments(self):
+        """Test that string tool call arguments are decoded before applying chat template."""
+        mock_tokenizer = MagicMock()
+        mock_hf_tokenizer = MagicMock()
+        mock_tokenizer = mock_hf_tokenizer
+        mock_tokenizer.eos_id = 2
+        mock_tokenizer.legacy = False
+
+        mock_hf_tokenizer.chat_template = "{% generation %}{{ messages }}{% endgeneration %}"
+        mock_hf_tokenizer.apply_chat_template.return_value = {
+            "input_ids": [1, 10, 20, 2],
+            "assistant_masks": [0, 0, 1, 1],
+        }
+
+        source = {
+            "messages": [
+                {"role": "user", "content": "What is the weather?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"location": "Denver\nCO"}'},
+                        },
+                        {
+                            "type": "function",
+                            "function": {"name": "get_time", "arguments": {"timezone": "UTC"}},
+                        },
+                    ],
+                },
+            ]
+        }
+
+        _chat_preprocess(source, mock_tokenizer)
+
+        rendered_chat = mock_hf_tokenizer.apply_chat_template.call_args[0][0]
+        tool_calls = rendered_chat[1]["tool_calls"]
+        assert tool_calls[0]["function"]["arguments"] == {"location": "Denver\nCO"}
+        assert tool_calls[1]["function"]["arguments"] == {"timezone": "UTC"}
+        assert source["messages"][1]["tool_calls"][0]["function"]["arguments"] == '{"location": "Denver\nCO"}'
+
+    def test_chat_preprocess_rejects_string_tool_call_arguments_that_are_not_objects(self):
+        """Test that malformed string tool call arguments fail before template rendering."""
+        mock_tokenizer = MagicMock()
+        mock_hf_tokenizer = MagicMock()
+        mock_tokenizer = mock_hf_tokenizer
+        mock_tokenizer.eos_id = 2
+        mock_tokenizer.legacy = False
+
+        mock_hf_tokenizer.chat_template = "{% generation %}{{ messages }}{% endgeneration %}"
+        source = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {"name": "bad_tool", "arguments": "not json"},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with pytest.raises(ValueError, match="tool_call function.arguments must be a JSON object string"):
+            _chat_preprocess(source, mock_tokenizer)
+
     def test_chat_preprocess_invalid_tokenizer(self):
         """Test that error is raised for tokenizer without apply_chat_template."""
         mock_tokenizer = MagicMock()
