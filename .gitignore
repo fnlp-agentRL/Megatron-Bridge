@@ -185,3 +185,6 @@ slurm*.out
 
 # UV package manager
 .uv/
+
+exp/
+.sii/
