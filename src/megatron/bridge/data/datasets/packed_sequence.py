@@ -100,7 +100,7 @@ def _pre_pad_data_point(data: dict, max_seq_length: int, max_length_to_pad: int,
 
 
 def tokenize_dataset(
-    path: Path,
+    path: str | Path | list[str | Path],
     tokenizer: MegatronTokenizer,
     max_seq_length: int,
     seed: int,
@@ -113,7 +113,7 @@ def tokenize_dataset(
     and prepares it for further processing.
 
     Args:
-        path (Path): Path to the dataset file.
+        path (str | Path | list[str | Path]): Path to the dataset file or a list of JSONL dataset files.
         tokenizer (MegatronTokenizer): The tokenizer to use for tokenization.
         max_seq_length (int): Maximum sequence length for the tokens.
         seed (int): Random seed for shuffling the dataset.
@@ -176,7 +176,7 @@ def tokenize_dataset(
 
 
 def prepare_packed_sequence_data(
-    input_path: Path,
+    input_path: str | Path | list[str | Path],
     output_path: Path,
     output_metadata_path: Path,
     packed_sequence_size: int,
@@ -192,7 +192,7 @@ def prepare_packed_sequence_data(
     Prepares a packed sequence dataset from a given input file and saves it to an output file.
 
     Args:
-        input_path (Path): Path to the input dataset file.
+        input_path (str | Path | list[str | Path]): Path to the input dataset file or a list of JSONL dataset files.
         output_path (Path): Path to save the packed sequence data.
         output_metadata_path (Path): Path to save packing metadata.
         packed_sequence_size (int): The maximum size for each packed sequence.

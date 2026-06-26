@@ -12,13 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import torch
 
-from megatron.bridge.data.datasets.packed_sequence import _pre_pad_data_point
+from megatron.bridge.data.datasets import packed_sequence as packed_sequence_module
+from megatron.bridge.data.datasets.packed_sequence import _pre_pad_data_point, tokenize_dataset
 from megatron.bridge.data.datasets.packing_utils import fill_packing_strategy
 
 
 PAD_ID = 0
+
+
+def test_tokenize_dataset_forwards_jsonl_path_list_to_create_sft_dataset(monkeypatch):
+    captured_kwargs = {}
+
+    def fake_create_sft_dataset(**kwargs):
+        captured_kwargs.update(kwargs)
+        return SimpleNamespace(tokenizer=SimpleNamespace(eod=PAD_ID), pad_seq_length_to_mult=1, max_seq_length=128)
+
+    monkeypatch.setattr(packed_sequence_module, "create_sft_dataset", fake_create_sft_dataset)
+    monkeypatch.setattr(packed_sequence_module, "_retrieve_tokenized", lambda dataset, num_workers: [])
+
+    input_paths = [Path("part_00000.jsonl"), Path("part_00001.jsonl")]
+    tokenize_dataset(
+        path=input_paths,
+        tokenizer=SimpleNamespace(),
+        max_seq_length=128,
+        seed=42,
+        dataset_kwargs={"chat": True},
+        pad_seq_to_mult=1,
+        num_tokenizer_workers=1,
+    )
+
+    assert captured_kwargs["path"] == input_paths
 
 
 def test_pre_pad_data_point_chat_tensors_do_not_raise():

@@ -124,6 +124,29 @@ def test_get_dataset_root_ignores_shared_fs_mkdir_race(tmp_path, monkeypatch, mk
 
 
 class TestDataGPTSFTDataset:
+    def test_create_sft_dataset_forwards_jsonl_path_list_to_memmap(self, monkeypatch):
+        captured_kwargs = {}
+
+        class FakeJSONLMemMapDataset:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+
+        monkeypatch.setattr(sft_module, "_JSONLMemMapDataset", FakeJSONLMemMapDataset)
+
+        tokenizer = create_mock_tokenizer()
+        tokenizer._tokenizer = MagicMock()
+        tokenizer._tokenizer.apply_chat_template = MagicMock()
+
+        dataset = sft_module.create_sft_dataset(
+            path=[Path("part_00000.jsonl"), Path("part_00001.jsonl")],
+            tokenizer=tokenizer,
+            chat=True,
+            use_hf_tokenizer_chat_template=True,
+        )
+
+        assert dataset.file_path == ["part_00000.jsonl", "part_00001.jsonl"]
+        assert captured_kwargs["dataset_paths"] == ["part_00000.jsonl", "part_00001.jsonl"]
+
     def test_build_samples_mapping(self, tmp_path):
         dataset, _ = get_gpt_sft(tmp_path)
         dataset._build_samples_mapping()

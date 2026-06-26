@@ -101,7 +101,7 @@ def get_dataset_root(name: str) -> Path:
 
 
 def create_sft_dataset(
-    path: str | Path,
+    path: str | Path | list[str | Path],
     tokenizer: "MegatronTokenizer",
     seq_length: int = 2048,
     add_bos: bool = False,
@@ -144,9 +144,9 @@ def create_sft_dataset(
     4. Otherwise: GPTSFTDataset
 
     Args:
-        path (str | Path): Path to the dataset file or packed parquet spec (file/dir/glob).
-            For packed datasets, this can be a .npy file, a .parquet file, a directory
-            containing parquet files, or a glob pattern.
+        path (str | Path | list[str | Path]): Path to the dataset file, a list of JSONL files,
+            or packed parquet spec (file/dir/glob). For packed datasets, this can be a .npy file,
+            a .parquet file, a directory containing parquet files, or a glob pattern.
         tokenizer (MegatronTokenizer): The tokenizer to use for tokenizing the data.
         seq_length (int, optional): Maximum sequence length for each example. Defaults to 2048.
         add_bos (bool, optional): Whether to add a beginning-of-sentence token. Defaults to False.
@@ -184,11 +184,12 @@ def create_sft_dataset(
     Returns:
         GPTSFTDataset | GPTSFTChatDataset | GPTSFTPackedDataset: An instance of the appropriate SFT dataset class.
     """
-    # Normalize path to string for consistent handling
-    path_str = str(path)
+    is_path_list = isinstance(path, list)
+    file_path = [str(p) for p in path] if is_path_list else str(path)
+    path_str = "" if is_path_list else file_path
 
     gpt_sft_dataset_kwargs = {
-        "file_path": path_str,
+        "file_path": file_path,
         "tokenizer": tokenizer,
         "max_seq_length": seq_length,
         "memmap_workers": memmap_workers,
@@ -209,7 +210,7 @@ def create_sft_dataset(
     }
 
     # Check for .npy packed dataset (legacy format)
-    if path_str.lower().endswith(".npy"):
+    if not is_path_list and path_str.lower().endswith(".npy"):
         return GPTSFTPackedDataset(
             pack_metadata_file_path=pack_metadata_file_path,
             pad_cu_seqlens=pad_cu_seqlens,
@@ -230,7 +231,7 @@ def create_sft_dataset(
     # - Directory/glob specs clearly indicate packed parquet shards
     # - Schema validation (REQUIRED_COLUMNS) will fast-fail if files aren't packed format
     # - This allows externally-prepared packed data to work without requiring MB metadata
-    if is_packed_parquet_spec(path_str):
+    if not is_path_list and is_packed_parquet_spec(path_str):
         return GPTSFTPackedParquetDataset(
             pack_metadata_file_path=pack_metadata_file_path,
             pad_cu_seqlens=pad_cu_seqlens,
@@ -256,7 +257,7 @@ class GPTSFTDataset(Dataset):
 
     def __init__(
         self,
-        file_path: str,
+        file_path: str | list[str],
         tokenizer: MegatronTokenizer,
         max_seq_length: int = 1024,
         min_seq_length: int = 1,
@@ -390,8 +391,9 @@ class GPTSFTDataset(Dataset):
                 split="train",
             )
         else:
+            dataset_paths = self.file_path if isinstance(self.file_path, list) else [self.file_path]
             self.indexed_dataset = _JSONLMemMapDataset(
-                dataset_paths=[self.file_path],
+                dataset_paths=dataset_paths,
                 tokenizer=None,
                 header_lines=0,
                 index_mapping_dir=self.index_mapping_dir,
