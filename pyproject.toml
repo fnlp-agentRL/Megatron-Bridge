@@ -112,6 +112,7 @@ managed = true
 # mamba-ssm, causal-conv1d, and transformer-engine are optional extras ([ssm], [te])
 # but kept here so they build correctly when installed.
 no-build-isolation-package = [
+    "apex",
     "transformer-engine",
     "transformer-engine-torch",
     "mamba-ssm",
@@ -147,6 +148,7 @@ name = "nvidia"
 url = "https://pypi.nvidia.com"
 
 [tool.uv.sources]
+apex = { git = "https://github.com/NVIDIA/apex.git" }
 megatron-core = { path = "3rdparty/Megatron-LM/", editable = true }
 nvidia-modelopt = { index = "nvidia" }
 
@@ -155,6 +157,13 @@ NVTE_FRAMEWORK = "pytorch"
 MAX_JOBS = "16"
 NVTE_BUILD_THREADS_PER_JOB = "1"
 NVTE_CUDA_ARCHS = "90"
+
+  [tool.uv.extra-build-variables.apex]
+  APEX_CPP_EXT = "1"
+  APEX_CUDA_EXT = "1"
+  APEX_PARALLEL_BUILD = "8"
+  NVCC_APPEND_FLAGS = "--threads 4"
+  TORCH_CUDA_ARCH_LIST = "9.0"
 
 [project.optional-dependencies]
 recipes = [
@@ -172,6 +181,9 @@ te = [
 ssm = [
     "mamba-ssm",
     "causal-conv1d",
+]
+apex = [
+    "apex",
 ]
 audio = [
     "librosa",
