@@ -279,7 +279,7 @@ def write_packed_parquet(
         {
             "input_ids": [row["input_ids"] for row in rows],
             "loss_mask": [row["loss_mask"] for row in rows],
-            "padding_mask": [row.get("padding_mask", [0] * len(row["input_ids"])) for row in rows],
+            "padding_mask": [row.get("padding_mask", [False] * len(row["input_ids"])) for row in rows],
             "seq_start_id": [row["seq_start_id"] for row in rows],
         }
     )
@@ -309,8 +309,8 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
     The Parquet file(s) must contain the following columns:
         - input_ids: list<int32> - Token IDs for the packed sequence
         - seq_start_id: list<int32> - Start offsets for each sub-sequence within the pack
-        - loss_mask: list<int8> - Per-token loss mask (0 or 1), same length as input_ids
-        - padding_mask: optional list<int8> - Artificial pad-token mask (1 for padding, 0 otherwise),
+        - loss_mask: list<bool> - Per-token loss mask, same length as input_ids
+        - padding_mask: optional list<bool> - Artificial pad-token mask (True for padding, False otherwise),
           same length as input_ids. Missing columns are omitted from returned samples for backward compatibility.
 
     Example:
@@ -664,9 +664,9 @@ class GPTSFTPackedParquetDataset(GPTSFTPackedDataset):
 
         # For padding samples, zero out the loss mask and exclude all dummy tokens from padding-aware routing.
         if is_padding_sample:
-            loss_mask = [0] * len(loss_mask)
+            loss_mask = [False] * len(loss_mask)
             if has_padding_mask:
-                padding_mask = [1] * len(padding_mask)
+                padding_mask = [True] * len(padding_mask)
 
         sample = {
             "input_ids": input_ids,

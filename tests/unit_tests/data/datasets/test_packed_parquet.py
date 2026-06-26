@@ -35,6 +35,7 @@ from megatron.bridge.data.datasets.packed_parquet import (
     GPTSFTPackedParquetDataset,
     _resolve_parquet_paths,
     is_packed_parquet_file,
+    write_packed_parquet,
 )
 
 
@@ -62,8 +63,8 @@ def _make_packed_row(n_tokens: int = 64, n_seqs: int = 2):
     seq_start_id = [i * tokens_per_seq for i in range(n_seqs)]
     return {
         "input_ids": list(range(1, n_tokens + 1)),
-        "loss_mask": [1] * n_tokens,
-        "padding_mask": [0] * n_tokens,
+        "loss_mask": [True] * n_tokens,
+        "padding_mask": [False] * n_tokens,
         "seq_start_id": seq_start_id,
     }
 
@@ -74,7 +75,7 @@ def _write_parquet(path: str | Path, rows: list[dict], row_group_size: int = 500
         {
             "input_ids": [row["input_ids"] for row in rows],
             "loss_mask": [row["loss_mask"] for row in rows],
-            "padding_mask": [row.get("padding_mask", [0] * len(row["input_ids"])) for row in rows],
+            "padding_mask": [row.get("padding_mask", [False] * len(row["input_ids"])) for row in rows],
             "seq_start_id": [row["seq_start_id"] for row in rows],
         }
     )
@@ -202,8 +203,21 @@ class TestPackedParquetDatasetSingleFile:
     def test_negative_index_zeroes_loss_mask(self, parquet_file):
         ds = _make_dataset(parquet_file)
         sample = ds[-1]
-        assert all(m == 0 for m in sample["loss_mask"])
-        assert all(m == 1 for m in sample["padding_mask"])
+        assert all(m is False for m in sample["loss_mask"])
+        assert all(m is True for m in sample["padding_mask"])
+
+    def test_write_packed_parquet_bool_masks(self, tmp_path):
+        row = _make_packed_row(n_tokens=8, n_seqs=2)
+        row["loss_mask"] = [False, True, True, False, False, True, True, False]
+        row["padding_mask"] = [False, False, False, True, False, False, False, True]
+        path = tmp_path / "bool_masks.idx.parquet"
+
+        write_packed_parquet([row], path)
+
+        ds = _make_dataset(path)
+        sample = ds[0]
+        assert sample["loss_mask"] == row["loss_mask"]
+        assert sample["padding_mask"] == row["padding_mask"]
 
     def test_missing_padding_mask_column_omits_field(self, tmp_path):
         table = pa.table(

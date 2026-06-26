@@ -262,7 +262,7 @@ def fill_packing_strategy(
             try:
                 loss_mask = np.array([x["loss_mask"] for x in per_seq_data])[perm].tolist()
                 # roll loss mask by 1 to align with labels. We want to train on the output after the last context token
-                loss_mask = [x[1:] + [False] for x in loss_mask]
+                loss_mask = [[bool(value) for value in x[1:]] + [False] for x in loss_mask]
             except KeyError:
                 try:
                     loss_mask = np.array(
@@ -285,7 +285,7 @@ def fill_packing_strategy(
             for item in per_seq_data:
                 item_padding_mask = item.get("padding_mask")
                 if item_padding_mask is None:
-                    item_padding_mask = [0] * len(item["input_ids"])
+                    item_padding_mask = [False] * len(item["input_ids"])
                 if len(item_padding_mask) != len(item["input_ids"]):
                     err_msg = "padding_mask length must match input_ids length in example - "
                     err_msg += f"{len(item_padding_mask)=} {len(item['input_ids'])=} {item}"
@@ -295,6 +295,7 @@ def fill_packing_strategy(
                     item_padding_mask = item_padding_mask.tolist()
                 else:
                     item_padding_mask = list(item_padding_mask)
+                item_padding_mask = [bool(value) for value in item_padding_mask]
                 padding_mask.append(item_padding_mask)
             padding_mask = np.array(padding_mask)[perm].tolist()
             ifile_handles[seq_len] = (input_ids, loss_mask, padding_mask)
