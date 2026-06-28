@@ -337,6 +337,7 @@ class Qwen3VLModel(MegatronModule):
         attention_mask: torch.Tensor = None,
         labels: torch.Tensor = None,
         loss_mask: torch.Tensor = None,
+        padding_mask: torch.Tensor = None,
         inference_params: InferenceParams = None,
         packed_seq_params: PackedSeqParams = None,
         extra_block_kwargs: dict = None,
@@ -399,6 +400,7 @@ class Qwen3VLModel(MegatronModule):
         # so it must be a real tensor. For packed sequences we use the THD-format
         # input_ids_thd (updated below); for regular sequences we use input_ids as-is.
         lm_input_ids = input_ids
+        lm_padding_mask = padding_mask
 
         if self.pre_process:
             # can reorganize_inputs at dataset
@@ -568,6 +570,25 @@ class Qwen3VLModel(MegatronModule):
                     input_ids, attention_mask, pre_process=True, pg_collection=self.pg_collection
                 )
 
+        if lm_padding_mask is not None:
+            if packed_seq_params is not None:
+                lm_padding_mask = ~preprocess_packed_seqs(
+                    (~lm_padding_mask.bool()).contiguous(),
+                    attention_mask,
+                    pre_process=True,
+                    pg_collection=self.pg_collection,
+                )[0].bool()
+            elif cp_size > 1:
+                lm_padding_mask = split_data_cp_rank(lm_padding_mask, cp_size, 1, cp_rank)
+            if self.config.sequence_parallel:
+                lm_padding_mask = (
+                    tensor_parallel.scatter_to_sequence_parallel_region(
+                        lm_padding_mask.transpose(0, 1).contiguous(), group=self.pg_collection.tp
+                    )
+                    .transpose(0, 1)
+                    .contiguous()
+                )
+
         visual_pos_masks = vision_mask
         deepstack_visual_embeds = deepstack_feature_lists
         if self.config.sequence_parallel or cp_size > 1:
@@ -632,6 +653,7 @@ class Qwen3VLModel(MegatronModule):
             decoder_input=combined_embeddings,  # only not None in the first decoder PP stage
             labels=labels,  # only not None in the last decoder PP stage
             loss_mask=loss_mask,  # Added for THD training compatibility
+            padding_mask=lm_padding_mask,
             inference_params=inference_params,  # currently always None
             packed_seq_params=packed_seq_params,  # currently always None
             runtime_gather_output=runtime_gather_output,

@@ -66,6 +66,7 @@ def get_batch_from_iterator(
 
     # Instead of raw tensors, expect a single 'visual_inputs' object in batch
     required_device_keys.add("visual_inputs")
+    required_device_keys.add("padding_mask")
 
     if "cu_seqlens" in batch:
         required_device_keys.add("cu_seqlens")
@@ -119,6 +120,7 @@ def get_batch(
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
+    torch.Tensor,
     Any,
 ]:
     """Generate a batch.
@@ -155,6 +157,7 @@ def get_batch(
         batch.get("labels"),
         batch.get("loss_mask"),
         batch.get("attention_mask"),
+        batch.get("padding_mask"),
         batch.get("position_ids"),
         batch.get("cu_seqlens"),
         batch.get("cu_seqlens_argmin"),
@@ -170,12 +173,13 @@ def pad_batch_sequences(
     labels: torch.Tensor,
     loss_mask: torch.Tensor,
     attention_mask: torch.Tensor,
+    padding_mask: torch.Tensor,
     position_ids: torch.Tensor,
     this_pg_collection,
     use_fp8_padding: bool = False,
     force_to_pad_to_seq_len: bool = False,
     seq_length: int = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Pad or truncate the batch sequences to the target length for Qwen3-VL.
     """
@@ -195,9 +199,10 @@ def pad_batch_sequences(
     labels = pad_or_truncate_2d_to_len(labels, target_len=target_len, max_cap=target_len, pad_value=-100)
     loss_mask = pad_or_truncate_2d_to_len(loss_mask, target_len=target_len, max_cap=target_len, pad_value=0)
     attention_mask = pad_or_truncate_attn_to_len(attention_mask, target_len=target_len, max_cap=target_len)
+    padding_mask = pad_or_truncate_2d_to_len(padding_mask, target_len=target_len, max_cap=target_len, pad_value=1)
     position_ids = pad_or_truncate_pos_to_len(position_ids, target_len=target_len, max_cap=target_len)
 
-    return tokens, labels, loss_mask, attention_mask, position_ids
+    return tokens, labels, loss_mask, attention_mask, padding_mask, position_ids
 
 
 def forward_step(
@@ -234,6 +239,7 @@ def forward_step(
             labels,
             loss_mask,
             attention_mask,
+            padding_mask,
             position_ids,
             cu_seqlens,
             cu_seqlens_argmin,
@@ -247,11 +253,12 @@ def forward_step(
     # To be compatible with qwen3vl, we move the sequence padding to forward_step function.
     # Qwen3VL model need the original input and do cp and sp split in model.forward.
     pack_sequences_in_batch = getattr(state.cfg.dataset, "pack_sequences_in_batch", False)
-    tokens, labels, loss_mask, attention_mask, position_ids = pad_batch_sequences(
+    tokens, labels, loss_mask, attention_mask, padding_mask, position_ids = pad_batch_sequences(
         tokens,
         labels,
         loss_mask,
         attention_mask,
+        padding_mask,
         position_ids,
         this_pg_collection,
         use_fp8_padding=True,
@@ -285,6 +292,7 @@ def forward_step(
     )
     forward_args["packed_seq_params"] = packed_seq_params
     forward_args["input_ids"] = original_tokens
+    forward_args["padding_mask"] = padding_mask
     # calculate position_ids in model forward
     forward_args["position_ids"] = None
     if pack_sequences_in_batch:
