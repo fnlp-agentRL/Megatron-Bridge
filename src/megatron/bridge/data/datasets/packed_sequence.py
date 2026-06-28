@@ -66,11 +66,13 @@ def _pre_pad_data_point(data: dict, max_seq_length: int, max_length_to_pad: int,
 
     Args:
         data: A single tokenized example. Mutated in place.
-        max_seq_length: Hard upper bound; sequences longer than this are truncated.
+        max_seq_length: Hard upper bound for shifted training tokens; the stored token stream may be
+            one token longer because labels are shifted from ``input_ids``.
         max_length_to_pad: Target length to pad up to (a multiple of ``pad_seq_to_mult``).
         pad_id: Token id used to pad ``input_ids``/``context_ids``.
     """
     assert max_seq_length >= max_length_to_pad
+    max_token_stream_length = max_seq_length + 1
     if "input_ids" in data and "padding_mask" not in data:
         input_ids = data["input_ids"]
         input_ids = input_ids.tolist() if hasattr(input_ids, "tolist") else list(input_ids)
@@ -88,13 +90,13 @@ def _pre_pad_data_point(data: dict, max_seq_length: int, max_length_to_pad: int,
         if len(val) <= max_length_to_pad:
             # input_ids are truncated by 1 for labels; add 1 extra pad token
             val = val + [pad_value] * (max_length_to_pad - len(val) + 1)
-        elif len(val) > max_seq_length:
+        elif len(val) > max_token_stream_length:
             logger.info(
-                "Sequence length %d is larger than max_seq_length %d; truncating for packing.",
+                "Sequence length %d is larger than max_seq_length + 1 (%d); truncating for packing.",
                 len(val),
-                max_seq_length,
+                max_token_stream_length,
             )
-            val = val[:max_seq_length]
+            val = val[:max_token_stream_length]
         data[key] = val
     return
 

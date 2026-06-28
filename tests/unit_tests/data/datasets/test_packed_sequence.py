@@ -97,14 +97,27 @@ def test_pre_pad_data_point_non_chat_lists_still_work():
     assert data["padding_mask"] == [False, False, False] + [True] * 6
 
 
-def test_pre_pad_data_point_truncates_overlong():
-    """Sequences longer than max_seq_length are truncated."""
-    data = {"input_ids": list(range(20)), "loss_mask": [True] * 20}
-    _pre_pad_data_point(data, max_seq_length=16, max_length_to_pad=8, pad_id=PAD_ID)
+def test_pre_pad_data_point_pads_max_seq_length_to_shifted_stream_length():
+    """A full training-length sample needs one extra stored token for shifted labels."""
+    data = {"input_ids": list(range(16)), "loss_mask": [True] * 16}
+    _pre_pad_data_point(data, max_seq_length=16, max_length_to_pad=16, pad_id=PAD_ID)
 
-    assert len(data["input_ids"]) == 16
-    assert len(data["loss_mask"]) == 16
-    assert len(data["padding_mask"]) == 16
+    assert len(data["input_ids"]) == 17
+    assert len(data["loss_mask"]) == 17
+    assert len(data["padding_mask"]) == 17
+    assert data["input_ids"][-1] == PAD_ID
+    assert data["loss_mask"][-1] is False
+    assert data["padding_mask"][-1] is True
+
+
+def test_pre_pad_data_point_truncates_overlong():
+    """Sequences longer than the shifted token stream are truncated."""
+    data = {"input_ids": list(range(20)), "loss_mask": [True] * 20}
+    _pre_pad_data_point(data, max_seq_length=16, max_length_to_pad=16, pad_id=PAD_ID)
+
+    assert len(data["input_ids"]) == 17
+    assert len(data["loss_mask"]) == 17
+    assert len(data["padding_mask"]) == 17
 
 
 def test_fill_packing_strategy_preserves_padding_mask():
