@@ -188,8 +188,8 @@ class TestChatPreprocess:
         call_kwargs = mock_hf_tokenizer.apply_chat_template.call_args[1]
         assert call_kwargs["tools"] == tool_schemas
 
-    def test_chat_preprocess_forwards_max_length(self):
-        """Test chat preprocessing forwards max_length to the HF tokenizer."""
+    def test_chat_preprocess_truncates_to_shifted_token_stream_length(self):
+        """Test chat preprocessing truncates to one token beyond shifted training length."""
         mock_tokenizer = MagicMock()
         mock_hf_tokenizer = MagicMock()
         mock_tokenizer = mock_hf_tokenizer
@@ -207,7 +207,8 @@ class TestChatPreprocess:
         _chat_preprocess(source, mock_tokenizer, max_length=512)
 
         call_kwargs = mock_hf_tokenizer.apply_chat_template.call_args[1]
-        assert call_kwargs["max_length"] == 512
+        assert call_kwargs["max_length"] == 513
+        assert call_kwargs["truncation"] is True
 
     def test_chat_preprocess_normalizes_string_tool_call_arguments(self):
         """Test that string tool call arguments are decoded before applying chat template."""
@@ -438,7 +439,8 @@ class TestGPTSFTChatDataset:
         assert "conversations" not in result["metadata"]
 
         call_kwargs = mock_hf_tokenizer.apply_chat_template.call_args[1]
-        assert call_kwargs["max_length"] == 512
+        assert call_kwargs["max_length"] == 513
+        assert call_kwargs["truncation"] is True
 
     @patch("megatron.bridge.data.datasets.sft._JSONLMemMapDataset")
     def test_collate_fn_handles_loss_mask(self, mock_dataset_class):
@@ -886,8 +888,8 @@ class TestTruncationWithChatTemplates:
     """Test cases for truncation behavior with chat templates."""
 
     @patch("megatron.bridge.data.datasets.sft._JSONLMemMapDataset")
-    def test_truncation_happens_in_collate_fn(self, mock_dataset_class):
-        """Test that truncation happens in collate_fn, not _process_example."""
+    def test_process_example_requests_chat_template_truncation(self, mock_dataset_class):
+        """Test that HF chat preprocessing asks tokenizer to truncate before collate."""
         mock_dataset = MagicMock()
         mock_dataset.__len__.return_value = 10
         mock_dataset_class.return_value = mock_dataset
@@ -915,11 +917,14 @@ class TestTruncationWithChatTemplates:
         example = {"conversations": [{"from": "User", "value": "Test"}]}
         result = dataset._process_example(example)
 
-        # _process_example does NOT truncate - that happens in collate_fn
-        # Just verify it processed successfully
+        # The mock tokenizer does not apply truncation itself, but the real HF tokenizer
+        # will honor the kwargs passed through apply_chat_template.
         assert "input_ids" in result
         assert "loss_mask" in result
         assert len(result["loss_mask"]) == len(result["input_ids"])
+        call_kwargs = mock_hf_tokenizer.apply_chat_template.call_args[1]
+        assert call_kwargs["max_length"] == 513
+        assert call_kwargs["truncation"] is True
 
     @patch("megatron.bridge.data.datasets.sft._JSONLMemMapDataset")
     def test_collate_fn_truncation_warning(self, mock_dataset_class):

@@ -934,7 +934,8 @@ def _chat_preprocess(
         tokenizer - tokenizer to apply chat templates to
         tool_schemas - Optional tool_schemas to supply to apply_chat_template, these will be superseded
            by tools supplied with the message
-        max_length - Optional maximum token length forwarded to apply_chat_template.
+        max_length - Optional maximum shifted training length. When provided, chat tokenization is truncated to
+        ``max_length + 1`` so the stored token stream still has one extra token for shifted labels.
 
     Output:
         {
@@ -982,13 +983,16 @@ def _chat_preprocess(
             "path instead of use_hf_tokenizer_chat_template=True."
         )
 
+    tokenization_max_length = max_length + 1 if max_length is not None else None
+
     tokenized_chat = tokenizer.apply_chat_template(
         chat,
         tools=tools,
         tokenize=True,
         return_dict=True,
         return_assistant_tokens_mask=True,
-        max_length=max_length,
+        max_length=tokenization_max_length,
+        truncation=max_length is not None,
     )
 
     # Choose the last conversation as answer other history are context by finding the last masked token
