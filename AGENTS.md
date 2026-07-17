@@ -25,7 +25,6 @@ skill keyword — infer it from the artifact you read.
 ## Boundaries
 
 **NEVER:**
-- Modify files inside `3rdparty/Megatron-LM/` — changes go through the upstream repo
 - Run the full test suite — run only the specific tests relevant to your change
 - Add required (non-optional) dependencies — use optional extras; submit dependency changes as a separate PR
 - Commit secrets, tokens, `.env` files, or environment-specific paths / account names (e.g. `/home/yuya/…`, usernames, cluster hostnames)
