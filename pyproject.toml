@@ -121,6 +121,7 @@ no-build-isolation-package = [
     "flash_mla",
     "flash-linear-attention",
     "fast-hadamard-transform",
+    "deep-ep",
 ]
 prerelease = "allow"
 override-dependencies = [
@@ -140,17 +141,25 @@ override-dependencies = [
     "langchain-core>=0.3.80",                               # To address CVE-2025-65106
     "onnx>=1.21.0; python_version < '3.13'",                # onnx<1.21 has missing lower bound on ml-dtypes, uses float4_e2m1fn (requires ml-dtypes>=0.5.0)
     "nvidia-cudnn-frontend==1.23.0",
-    "nvidia-cutlass-dsl[cu13]; sys_platform == 'never'"     # Rely on system site packages install
+    "nvidia-cutlass-dsl[cu13]; sys_platform == 'never'",     # Rely on system site packages install
+    "nvidia-nccl-cu13>=2.30.4",
 ]
 
 [[tool.uv.index]]
 name = "nvidia"
 url = "https://pypi.nvidia.com"
 
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
 [tool.uv.sources]
 apex = { git = "https://github.com/NVIDIA/apex.git" }
 megatron-core = { path = "3rdparty/Megatron-LM/", editable = true }
 nvidia-modelopt = { index = "nvidia" }
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
 
 [tool.uv.extra-build-variables.transformer-engine]
 NVTE_FRAMEWORK = "pytorch"
@@ -158,12 +167,12 @@ MAX_JOBS = "16"
 NVTE_BUILD_THREADS_PER_JOB = "1"
 NVTE_CUDA_ARCHS = "90"
 
-  [tool.uv.extra-build-variables.apex]
-  APEX_CPP_EXT = "1"
-  APEX_CUDA_EXT = "1"
-  APEX_PARALLEL_BUILD = "8"
-  NVCC_APPEND_FLAGS = "--threads 4"
-  TORCH_CUDA_ARCH_LIST = "9.0"
+[tool.uv.extra-build-variables.apex]
+APEX_CPP_EXT = "1"
+APEX_CUDA_EXT = "1"
+APEX_PARALLEL_BUILD = "8"
+NVCC_APPEND_FLAGS = "--threads 4"
+TORCH_CUDA_ARCH_LIST = "9.0"
 
 [project.optional-dependencies]
 recipes = [
