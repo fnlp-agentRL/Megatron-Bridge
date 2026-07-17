@@ -2233,6 +2233,9 @@ test = [
     { name = "pytest-runner" },
     { name = "pytest-timeout" },
 ]
+yicloud = [
+    { name = "yicloud-sdk-python" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -2316,6 +2319,7 @@ test = [
     { name = "pytest-runner", specifier = ">=6.0.1" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
 ]
+yicloud = [{ name = "yicloud-sdk-python" }]
 
 [[package]]
 name = "megatron-core"
@@ -5442,6 +5446,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/25/722e3b93bd687009afb2d59a35e13d30ddd8f80571445bb0c4e4ce26ec66/yarl-1.24.2-cp312-cp312-win_amd64.whl", hash = "sha256:7dafe10c12ddd4d120d528c4b5599c953bd7b12845347d507b95451195bb6cad", size = 92901, upload-time = "2026-05-19T21:29:20.014Z" },
     { url = "https://files.pythonhosted.org/packages/39/47/4486ccfb674c04854a1ef8aa77868b6a6f765feaf69633409d7ca4f02cb8/yarl-1.24.2-cp312-cp312-win_arm64.whl", hash = "sha256:044a09d8401fcf8681977faef6d286b8ade1e2d2e9dceda175d1cfa5ca496f30", size = 87229, upload-time = "2026-05-19T21:29:22.1Z" },
     { url = "https://files.pythonhosted.org/packages/fd/4d/4b880086bd0d3e034d25647be1d830afc3e3f610e98c4ab3490af6b1b6d5/yarl-1.24.2-py3-none-any.whl", hash = "sha256:2783d9226db8797636cd6896e4de81feed252d1db72265686c9558d97a4d94b9", size = 53576, upload-time = "2026-05-19T21:31:03.909Z" },
+]
+
+[[package]]
+name = "yicloud-sdk-python"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/aa/d4/15a46efd87cbf4943ec0f73249f9b8185fe7127906ff606f406ceb301c07/yicloud_sdk_python-0.3.1.tar.gz", hash = "sha256:e286762f14cf0f1f84852e756e1d1deb5a51a3ca4d9c902746b05234f07bf79d", size = 77285, upload-time = "2026-07-16T10:20:42.508Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3a/a3/4eea7d0e6e0d65b1dfd28c970c4336688a34059f604807311ae5e931064b/yicloud_sdk_python-0.3.1-py3-none-any.whl", hash = "sha256:fd0ee4f20311bd6fc42be3aa356b687c10ae74356489f16aeb6f2c75889a9170", size = 100748, upload-time = "2026-07-16T10:20:41.212Z" },
 ]
 
 [[package]]

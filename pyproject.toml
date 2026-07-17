@@ -233,6 +233,7 @@ build = ["setuptools", "torch", "pybind11", "Cython>=3.0.0", "numpy", "ninja", "
 # them at test time with scripts/install_diffusion_deps.sh. This group is kept for
 # documentation only; `uv sync --group diffusion` will NOT install them on Linux.
 diffusion = ["imageio", "imageio-ffmpeg", "av"]
+yicloud = ["yicloud-sdk-python"]
 
 [project.entry-points."nemo_run.cli"]
 lm = "megatron.bridge"
