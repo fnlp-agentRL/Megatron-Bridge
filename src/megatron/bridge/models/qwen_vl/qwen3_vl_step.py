@@ -14,7 +14,7 @@
 import logging
 import math
 from functools import partial
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import torch
 from megatron.core.models.gpt import GPTModel
@@ -210,6 +210,9 @@ def forward_step(
     data_iterator: Iterable,
     model: GPTModel,
     return_schedule_plan: bool = False,
+    *,
+    output_processor: Callable[..., torch.Tensor] | None = None,
+    output_processor_context: Any | None = None,
 ) -> tuple[torch.Tensor, partial]:
     """Forward training step.
 
@@ -218,6 +221,8 @@ def forward_step(
         data_iterator: Input data iterator
         model: The GPT Model
         return_schedule_plan (bool): Whether to return the schedule plan instead of the output tensor
+        output_processor: Optional GPT postprocessing hook.
+        output_processor_context: Optional context passed to the postprocessing hook.
 
     Returns:
         tuple containing the output tensor and the loss function
@@ -283,13 +288,15 @@ def forward_step(
         "attention_mask": attention_mask,
         "position_ids": position_ids,
     }
-
     original_tokens = tokens.clone()
     forward_args = get_batch_on_this_cp_rank(
         forward_args,
         is_hybrid_cp=False,
         cp_group=this_pg_collection.cp,
     )
+    if output_processor is not None:
+        forward_args["output_processor"] = output_processor
+        forward_args["output_processor_context"] = output_processor_context
     forward_args["packed_seq_params"] = packed_seq_params
     forward_args["input_ids"] = original_tokens
     forward_args["padding_mask"] = padding_mask
@@ -322,6 +329,8 @@ def forward_step(
     check_for_spiky_loss = state.cfg.rerun_state_machine.check_for_spiky_loss
     with straggler_timer:
         if return_schedule_plan:
+            if output_processor is not None:
+                raise ValueError("Qwen3-VL schedule plans do not support output_processor")
             assert config.overlap_moe_expert_parallel_comm, (
                 "overlap_moe_expert_parallel_comm must be enabled to return the schedule plan"
             )
