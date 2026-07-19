@@ -149,17 +149,11 @@ override-dependencies = [
 name = "nvidia"
 url = "https://pypi.nvidia.com"
 
-[[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
-explicit = true
 
 [tool.uv.sources]
 apex = { git = "https://github.com/NVIDIA/apex.git" }
 megatron-core = { path = "3rdparty/Megatron-LM/", editable = true }
 nvidia-modelopt = { index = "nvidia" }
-torch = { index = "pytorch-cu130" }
-torchvision = { index = "pytorch-cu130" }
 
 [tool.uv.extra-build-variables.transformer-engine]
 NVTE_FRAMEWORK = "pytorch"
