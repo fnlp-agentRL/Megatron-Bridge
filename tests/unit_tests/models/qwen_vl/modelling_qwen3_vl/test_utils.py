@@ -16,12 +16,14 @@
 
 import datetime
 import os
+import sys
 from types import SimpleNamespace
 
 import pytest
 import torch
 import torch.distributed as dist
 from megatron.core import parallel_state
+from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 
 from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.rope import get_rope_index
@@ -35,6 +37,7 @@ from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.utils import (
     collapse_thw,
     expand_thw,
     get_dist_train_vision_dp_data,
+    get_packed_cp_indices,
     get_vision_cp_data,
     pack_dist_train_vision_module_output,
     preprocess_packed_seqs,
@@ -360,6 +363,82 @@ class TestQwen3VLUtils:
 
         self.destroy_parallel_state()
 
+    def test_get_packed_cp_indices_uses_padded_boundaries(self, monkeypatch):
+        """Packed CP slicing must use physical padded boundaries."""
+        calls = {}
+
+        def _get_indices(cu_seqlens, seq_len, cp_size, cp_rank):
+            calls["args"] = (cu_seqlens, seq_len, cp_size, cp_rank)
+            return torch.tensor([0, 3, 4, 7])
+
+        monkeypatch.setitem(
+            sys.modules,
+            "transformer_engine_torch",
+            SimpleNamespace(thd_get_partitioned_indices=_get_indices),
+        )
+        packed_seq_params = PackedSeqParams(
+            qkv_format="thd",
+            cu_seqlens_q=torch.tensor([0, 3, 5], dtype=torch.int32),
+            cu_seqlens_q_padded=torch.tensor([0, 4, 8], dtype=torch.int32),
+        )
+
+        indices = get_packed_cp_indices(packed_seq_params, 8, cp_size=2, cp_rank=1)
+
+        assert torch.equal(indices, torch.tensor([0, 3, 4, 7]))
+        assert calls["args"] == (packed_seq_params.cu_seqlens_q_padded, 8, 2, 1)
+
+    def test_preprocess_existing_packed_seqs_cp1_preserves_order(self):
+        """CP-disabled packed preprocessing only flattens the physical batch."""
+        input_ids = torch.arange(8).view(2, 4)
+        packed_seq_params = PackedSeqParams(
+            qkv_format="thd",
+            cu_seqlens_q=torch.tensor([0, 3, 8], dtype=torch.int32),
+        )
+        pg_collection = SimpleNamespace(
+            cp=SimpleNamespace(size=lambda: 1, rank=lambda: 0),
+        )
+
+        output, output_params = preprocess_packed_seqs(
+            input_ids,
+            attention_mask=None,
+            pg_collection=pg_collection,
+            packed_seq_params=packed_seq_params,
+        )
+
+        assert torch.equal(output, input_ids.reshape(1, -1))
+        assert output_params is packed_seq_params
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            torch.arange(8).view(1, 8),
+            torch.arange(8 * 3).view(1, 8, 3),
+        ],
+    )
+    def test_preprocess_existing_packed_seqs_uses_same_cp_indices(self, monkeypatch, value):
+        """IDs, masks, positions, and embeddings must share the packed CP layout."""
+        indices = torch.tensor([0, 3, 4, 7])
+        monkeypatch.setattr(
+            "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.utils.get_packed_cp_indices",
+            lambda *_args, **_kwargs: indices,
+        )
+        packed_seq_params = PackedSeqParams(
+            qkv_format="thd",
+            cu_seqlens_q=torch.tensor([0, 4, 8], dtype=torch.int32),
+        )
+        pg_collection = SimpleNamespace(
+            cp=SimpleNamespace(size=lambda: 2, rank=lambda: 0),
+        )
+
+        output, _ = preprocess_packed_seqs(
+            value,
+            attention_mask=None,
+            pg_collection=pg_collection,
+            packed_seq_params=packed_seq_params,
+        )
+
+        assert torch.equal(output, value.index_select(1, indices))
+
     @pytest.mark.skipif(
         not torch.cuda.is_available() or int(os.environ.get("WORLD_SIZE", "1")) < 2,
         reason="Requires at least 2 GPUs",
@@ -506,6 +585,53 @@ class TestQwen3VLUtils:
 
         assert torch.equal(position_ids, expected_positions)
         assert torch.equal(deltas, expected_deltas)
+
+    def test_get_rope_index_packed_matches_separate_text_sequences(self):
+        """Packed text sequences must reset positions exactly like separate forwards."""
+        first = torch.tensor([[11, 12, 13, 14]], dtype=torch.long)
+        second = torch.tensor([[21, 22, 23, 24]], dtype=torch.long)
+        packed = torch.cat((first, second), dim=1)
+        packed_seq_params = PackedSeqParams(
+            qkv_format="thd",
+            cu_seqlens_q=torch.tensor([0, first.size(1), packed.size(1)], dtype=torch.int32),
+        )
+        kwargs = {
+            "spatial_merge_size": 2,
+            "image_token_id": 151655,
+            "video_token_id": 151656,
+            "vision_start_token_id": 151652,
+        }
+
+        packed_positions, _ = get_rope_index(
+            **kwargs,
+            input_ids=packed,
+            packed_seq_params=packed_seq_params,
+        )
+        first_positions, _ = get_rope_index(**kwargs, input_ids=first)
+        second_positions, _ = get_rope_index(**kwargs, input_ids=second)
+
+        assert torch.equal(packed_positions, torch.cat((first_positions, second_positions), dim=2))
+
+    def test_get_rope_index_packed_uses_padded_physical_boundaries(self):
+        """Per-sequence positions reset at padded physical boundaries."""
+        input_ids = torch.tensor([[11, 12, 0, 0, 21, 22, 23, 0]], dtype=torch.long)
+        packed_seq_params = PackedSeqParams(
+            qkv_format="thd",
+            cu_seqlens_q=torch.tensor([0, 2, 5], dtype=torch.int32),
+            cu_seqlens_q_padded=torch.tensor([0, 4, 8], dtype=torch.int32),
+        )
+
+        position_ids, _ = get_rope_index(
+            spatial_merge_size=2,
+            image_token_id=151655,
+            video_token_id=151656,
+            vision_start_token_id=151652,
+            input_ids=input_ids,
+            packed_seq_params=packed_seq_params,
+        )
+
+        expected = torch.tensor([0, 1, 2, 3, 0, 1, 2, 3]).view(1, 1, -1).expand(3, -1, -1)
+        assert torch.equal(position_ids, expected)
 
     def test_get_rope_index_with_3d_attention_mask(self):
         """Test get_rope_index with 3D attention mask (batch, seq, seq)."""

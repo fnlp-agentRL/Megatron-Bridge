@@ -31,6 +31,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from megatron.core import parallel_state
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_with_transformer_engine_spec
+from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 from PIL import Image
@@ -602,6 +603,97 @@ class TestQwen3VLModel:
         assert language_model.last_kwargs is not None
         assert language_model.last_kwargs["visual_pos_masks"] is None
         assert language_model.last_kwargs["decoder_input"].shape == (2, 1, 4)
+
+    def test_packed_forward_matches_separate_and_cp_layout(self, monkeypatch):
+        """Two packed sequences must match separate forwards with and without CP."""
+        monkeypatch.setattr(
+            "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model.reorganize_inputs",
+            lambda **_kwargs: (None, None, None),
+        )
+        monkeypatch.setattr(
+            "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model.torch.cuda.nvtx.range_push",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model.torch.cuda.nvtx.range_pop",
+            lambda *_args, **_kwargs: None,
+        )
+
+        class DummyLanguageModel:
+            def __init__(self):
+                self.rotary_pos_emb = SimpleNamespace(is_thd_format=False)
+
+            def embedding(self, input_ids, position_ids=None):
+                del position_ids
+                return input_ids.T.unsqueeze(-1).float()
+
+            def __call__(self, **kwargs):
+                token_values = kwargs["decoder_input"].transpose(0, 1).squeeze(-1)
+                return token_values * 10 + kwargs["position_ids"][0]
+
+        cp_rank = {"value": 0}
+        cp_size = {"value": 1}
+        model = SimpleNamespace(
+            pre_process=True,
+            square_merge_size=4,
+            config=SimpleNamespace(
+                vision_dp_when_cp=False,
+                sequence_parallel=False,
+                spatial_merge_size=4,
+            ),
+            pg_collection=SimpleNamespace(
+                cp=SimpleNamespace(rank=lambda: cp_rank["value"], size=lambda: cp_size["value"]),
+                tp=SimpleNamespace(rank=lambda: 0, size=lambda: 1),
+                pp=object(),
+            ),
+            language_model=DummyLanguageModel(),
+            image_token_id=151655,
+            video_token_id=151656,
+            vision_start_token_id=151652,
+            use_dist_train=False,
+        )
+
+        first = torch.tensor([[11, 12, 13, 14]], dtype=torch.long)
+        second = torch.tensor([[21, 22, 23, 24]], dtype=torch.long)
+        packed = torch.cat((first, second), dim=1)
+        packed_seq_params = PackedSeqParams(
+            qkv_format="thd",
+            cu_seqlens_q=torch.tensor([0, first.size(1), packed.size(1)], dtype=torch.int32),
+        )
+
+        separate_output = torch.cat(
+            [
+                Qwen3VLModel.forward(model, input_ids=first),
+                Qwen3VLModel.forward(model, input_ids=second),
+            ],
+            dim=1,
+        )
+        packed_output = Qwen3VLModel.forward(
+            model,
+            input_ids=packed,
+            packed_seq_params=packed_seq_params,
+        )
+        assert torch.equal(packed_output, separate_output)
+
+        rank_indices = (
+            torch.tensor([0, 3, 4, 7]),
+            torch.tensor([1, 2, 5, 6]),
+        )
+        monkeypatch.setattr(
+            "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.utils.get_packed_cp_indices",
+            lambda *_args, **_kwargs: rank_indices[cp_rank["value"]],
+        )
+        cp_size["value"] = 2
+        reconstructed = torch.empty_like(packed_output)
+        for cp_rank["value"] in range(cp_size["value"]):
+            local_output = Qwen3VLModel.forward(
+                model,
+                input_ids=packed,
+                packed_seq_params=packed_seq_params,
+            )
+            reconstructed.index_copy_(1, rank_indices[cp_rank["value"]], local_output)
+
+        assert torch.equal(reconstructed, packed_output)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="Qwen3VLModel.forward requires CUDA")
     @pytest.mark.timeout(120)

@@ -197,6 +197,54 @@ def get_rope_index(
         video_grid_thw = torch.repeat_interleave(video_grid_thw, video_grid_thw[:, 0], dim=0)
         video_grid_thw[:, 0] = 1
 
+    if packed_seq_params is not None and input_ids is not None:
+        cu_seqlens = (
+            packed_seq_params.cu_seqlens_q_padded
+            if packed_seq_params.cu_seqlens_q_padded is not None
+            else packed_seq_params.cu_seqlens_q
+        )
+        if cu_seqlens is not None and cu_seqlens.numel() > 2 and input_ids.shape[0] == 1:
+            image_offset = 0
+            video_offset = 0
+            position_ids_list = []
+            deltas = []
+            flat_input_ids = input_ids[0]
+            boundaries = cu_seqlens.tolist()
+            for start, end in zip(boundaries[:-1], boundaries[1:]):
+                sequence_input_ids = flat_input_ids[start:end].unsqueeze(0)
+                vision_starts = torch.nonzero(
+                    sequence_input_ids[0] == vision_start_token_id,
+                    as_tuple=False,
+                ).flatten()
+                vision_tokens = sequence_input_ids[0][vision_starts + 1]
+                image_count = int((vision_tokens == image_token_id).sum().item())
+                video_count = int((vision_tokens == video_token_id).sum().item())
+                sequence_image_grid = (
+                    image_grid_thw[image_offset : image_offset + image_count]
+                    if image_grid_thw is not None and image_count > 0
+                    else None
+                )
+                sequence_video_grid = (
+                    video_grid_thw[video_offset : video_offset + video_count]
+                    if video_grid_thw is not None and video_count > 0
+                    else None
+                )
+                sequence_position_ids, sequence_delta = get_rope_index(
+                    spatial_merge_size,
+                    image_token_id,
+                    video_token_id,
+                    vision_start_token_id,
+                    input_ids=sequence_input_ids,
+                    image_grid_thw=sequence_image_grid,
+                    video_grid_thw=sequence_video_grid,
+                    attention_mask=torch.ones_like(sequence_input_ids),
+                )
+                position_ids_list.append(sequence_position_ids)
+                deltas.append(sequence_delta)
+                image_offset += image_count
+                video_offset += video_count
+            return torch.cat(position_ids_list, dim=2), torch.cat(deltas, dim=0)
+
     if packed_seq_params is not None and attention_mask is None and input_ids is not None:
         # Build an attention mask from packed sequence metadata when one is not provided.
         # cu_seqlens_q entries are cumulative lengths; their diffs give per-sample lengths.

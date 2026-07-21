@@ -509,20 +509,23 @@ class Qwen3VLModel(MegatronModule):
                 if attention_mask is None:
                     attention_mask = torch.ones_like(input_ids, dtype=torch.bool, device=input_ids.device)
                 input_ids_thd, _ = preprocess_packed_seqs(
-                    input_ids, attention_mask, pre_process=True, pg_collection=self.pg_collection
+                    input_ids,
+                    attention_mask,
+                    pre_process=True,
+                    pg_collection=self.pg_collection,
+                    packed_seq_params=packed_seq_params,
                 )
                 lm_input_ids = input_ids_thd
-                _, _, vision_mask_thd = reorganize_inputs(
-                    input_ids=input_ids_thd,
-                    pixel_values=pixel_values,
-                    pixel_values_videos=pixel_values_videos,
-                    image_grid_thw=image_grid_thw,
-                    video_grid_thw=video_grid_thw,
-                    image_input_mask=image_input_mask,
-                    video_input_mask=video_input_mask,
-                    image_token_id=self.image_token_id,
-                    video_token_id=self.video_token_id,
-                    square_merge_size=self.square_merge_size,
+                vision_mask_thd = (
+                    preprocess_packed_seqs(
+                        vision_mask,
+                        attention_mask,
+                        pre_process=True,
+                        pg_collection=self.pg_collection,
+                        packed_seq_params=packed_seq_params,
+                    )[0]
+                    if vision_mask is not None
+                    else None
                 )
 
                 if deepstack_feature_lists is not None:
@@ -535,6 +538,7 @@ class Qwen3VLModel(MegatronModule):
                             attention_mask,
                             pre_process=True,
                             pg_collection=self.pg_collection,
+                            packed_seq_params=packed_seq_params,
                         )[0]
                         new_deepstack_feature_lists.append(tmp_embeddings_thd[vision_mask_thd].contiguous())
 
@@ -547,6 +551,7 @@ class Qwen3VLModel(MegatronModule):
                         attention_mask,
                         pre_process=True,
                         pg_collection=self.pg_collection,
+                        packed_seq_params=packed_seq_params,
                     )[0]
                     .transpose(0, 1)
                     .contiguous()
@@ -567,17 +572,24 @@ class Qwen3VLModel(MegatronModule):
                 if attention_mask is None:
                     attention_mask = torch.ones_like(input_ids, dtype=torch.bool, device=input_ids.device)
                 lm_input_ids, _ = preprocess_packed_seqs(
-                    input_ids, attention_mask, pre_process=True, pg_collection=self.pg_collection
+                    input_ids,
+                    attention_mask,
+                    pre_process=True,
+                    pg_collection=self.pg_collection,
+                    packed_seq_params=packed_seq_params,
                 )
 
         if lm_padding_mask is not None:
             if packed_seq_params is not None:
-                lm_padding_mask = ~preprocess_packed_seqs(
-                    (~lm_padding_mask.bool()).contiguous(),
-                    attention_mask,
-                    pre_process=True,
-                    pg_collection=self.pg_collection,
-                )[0].bool()
+                lm_padding_mask = lm_padding_mask.bool()
+                if lm_padding_mask.numel() == input_ids.numel():
+                    lm_padding_mask = preprocess_packed_seqs(
+                        lm_padding_mask,
+                        attention_mask,
+                        pre_process=True,
+                        pg_collection=self.pg_collection,
+                        packed_seq_params=packed_seq_params,
+                    )[0]
             elif cp_size > 1:
                 lm_padding_mask = split_data_cp_rank(lm_padding_mask, cp_size, 1, cp_rank)
             if self.config.sequence_parallel:
@@ -627,6 +639,7 @@ class Qwen3VLModel(MegatronModule):
                 image_grid_thw=image_grid_thw,
                 video_grid_thw=video_grid_thw,
                 attention_mask=hf_attention_mask,
+                packed_seq_params=packed_seq_params,
             )  #  [3*b*s]
             if packed_seq_params is not None:
                 # convert position_ids to THD format
@@ -636,6 +649,7 @@ class Qwen3VLModel(MegatronModule):
                         attention_mask,
                         pre_process=True,
                         pg_collection=self.pg_collection,
+                        packed_seq_params=packed_seq_params,
                     )[0]
                     .permute(2, 0, 1)
                     .contiguous()

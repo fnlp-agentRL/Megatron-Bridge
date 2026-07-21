@@ -21,6 +21,7 @@ from megatron.core.models.gpt import GPTModel
 from megatron.core.pipeline_parallel.utils import is_pp_first_stage, is_pp_last_stage
 from megatron.core.utils import get_batch_on_this_cp_rank, get_model_config
 
+from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.utils import get_packed_cp_indices
 from megatron.bridge.training.config import ConfigContainer
 from megatron.bridge.training.losses import (
     create_masked_next_token_loss_function as _create_loss_function,
@@ -289,17 +290,34 @@ def forward_step(
         "position_ids": position_ids,
     }
     original_tokens = tokens.clone()
-    forward_args = get_batch_on_this_cp_rank(
-        forward_args,
-        is_hybrid_cp=False,
-        cp_group=this_pg_collection.cp,
-    )
+    cp_size = this_pg_collection.cp.size()
+    if packed_seq_params is not None and cp_size > 1:
+        indices = get_packed_cp_indices(
+            packed_seq_params,
+            original_tokens.size(1),
+            cp_size=cp_size,
+            cp_rank=this_pg_collection.cp.rank(),
+        )
+        assert indices is not None
+        for key, val in (
+            ("labels", forward_args["labels"]),
+            ("loss_mask", forward_args["loss_mask"]),
+            ("padding_mask", padding_mask),
+        ):
+            if val is not None:
+                forward_args[key] = val.reshape(1, -1).index_select(1, indices)
+    else:
+        forward_args = get_batch_on_this_cp_rank(
+            forward_args,
+            is_hybrid_cp=False,
+            cp_group=this_pg_collection.cp,
+        )
+        forward_args["padding_mask"] = padding_mask
     if output_processor is not None:
         forward_args["output_processor"] = output_processor
         forward_args["output_processor_context"] = output_processor_context
     forward_args["packed_seq_params"] = packed_seq_params
     forward_args["input_ids"] = original_tokens
-    forward_args["padding_mask"] = padding_mask
     # calculate position_ids in model forward
     forward_args["position_ids"] = None
     if pack_sequences_in_batch:

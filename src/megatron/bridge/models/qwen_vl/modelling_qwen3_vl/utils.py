@@ -28,6 +28,35 @@ from torch import nn
 from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.transformer_config import Qwen3VLTransformerConfig
 
 
+def get_packed_cp_indices(
+    packed_seq_params: PackedSeqParams,
+    seq_len: int,
+    *,
+    cp_size: int,
+    cp_rank: int,
+) -> torch.Tensor | None:
+    """Return Transformer Engine's packed-sequence CP indices when CP is enabled."""
+    if cp_size <= 1:
+        return None
+
+    cu_seqlens_padded = (
+        packed_seq_params.cu_seqlens_q_padded
+        if packed_seq_params.cu_seqlens_q_padded is not None
+        else packed_seq_params.cu_seqlens_q
+    )
+    if cu_seqlens_padded is None:
+        raise ValueError("packed_seq_params must provide cu_seqlens_q for context parallel partitioning")
+
+    import transformer_engine_torch as tex
+
+    return tex.thd_get_partitioned_indices(
+        cu_seqlens_padded,
+        seq_len,
+        cp_size,
+        cp_rank,
+    )
+
+
 # copied from https://github.com/huggingface/transformers/blob/main/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py
 class Qwen3VLVisionPatchEmbed(nn.Module):
     """
@@ -683,9 +712,10 @@ class AllGatherVisionEmbeddings(torch.autograd.Function):
 
 def preprocess_packed_seqs(
     input_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
+    attention_mask: torch.Tensor | None,
     pre_process: bool = True,
     pg_collection: Optional[ProcessGroupCollection] = None,
+    packed_seq_params: PackedSeqParams | None = None,
 ) -> tuple[torch.Tensor, PackedSeqParams]:
     """
     Preprocess packed sequences
@@ -693,6 +723,36 @@ def preprocess_packed_seqs(
     gets second and second last chunks, and so on), this is for load balancing with causal masking.
     See https://github.com/NVIDIA/TransformerEngine/issues/1368
     """
+    if pg_collection is not None:
+        cp_size = pg_collection.cp.size()
+        cp_rank = pg_collection.cp.rank()
+    else:
+        cp_size = mpu.get_context_parallel_world_size()
+        cp_rank = mpu.get_context_parallel_rank()
+
+    if packed_seq_params is not None:
+        # The input already follows the packed layout described by packed_seq_params.
+        # Flatten only the physical batch dimension, then use TE's per-sequence
+        # partition indices so every token-aligned tensor gets the same THD order.
+        input_ids_rmpad = input_ids.reshape(1, -1, *input_ids.shape[2:])
+        indices = get_packed_cp_indices(
+            packed_seq_params,
+            input_ids_rmpad.size(1),
+            cp_size=cp_size,
+            cp_rank=cp_rank,
+        )
+        if indices is not None:
+            input_ids_rmpad = input_ids_rmpad.index_select(1, indices)
+
+        return input_ids_rmpad, packed_seq_params
+
+    if attention_mask is None:
+        attention_mask = torch.ones(
+            input_ids.shape[:2],
+            dtype=torch.bool,
+            device=input_ids.device,
+        )
+
     batch_size = input_ids.shape[0]
 
     # Ensure boolean dtype for correct advanced indexing (bool → mask select,
@@ -703,12 +763,8 @@ def preprocess_packed_seqs(
     seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
     if pg_collection is not None:
         tp_size = pg_collection.tp.size()
-        cp_size = pg_collection.cp.size()
-        cp_rank = pg_collection.cp.rank()
     else:
         tp_size = mpu.get_tensor_model_parallel_world_size()
-        cp_size = mpu.get_context_parallel_world_size()
-        cp_rank = mpu.get_context_parallel_rank()
     align_size = tp_size * cp_size * 2 if cp_size > 1 else tp_size
 
     pad_size = (align_size - seqlens_in_batch % align_size) % align_size
